@@ -151,6 +151,8 @@ while [ ! -S /dev/log ]; do
     fi
 done
 
+echo "[$(date)] INFO: Syslog socket is ready."
+
 # 6. Construct Radio URL
 # ------------------------------------------------------------------------------
 RADIO_URL="spinel+hdlc+uart://${DEVICE}?uart-baudrate=${BAUDRATE}"
