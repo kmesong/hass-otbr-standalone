@@ -1,0 +1,11 @@
+#!/bin/bash
+# ==============================================================================
+# Start OpenThread BorderRouter web interface
+# ==============================================================================
+echo "[$(date)] INFO: Starting otbr-web..."
+
+# Use environment variable or default to 8080 (standalone default)
+# Note: HA Addon defaults to 8080, but our docker-compose maps it to 8081 external
+OTBR_WEB_PORT="${OTBR_WEB_PORT:-8080}"
+
+exec stdbuf -oL /usr/sbin/otbr-web -I wpan0 -d6 -s -a "::" -p "${OTBR_WEB_PORT}"

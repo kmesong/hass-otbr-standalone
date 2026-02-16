@@ -1,0 +1,19 @@
+#!/bin/bash
+# ==============================================================================
+# Start socat TCP client for OTBR agent daemon
+# ==============================================================================
+
+# Only run if NETWORK_DEVICE is set
+if [[ -z "${NETWORK_DEVICE}" ]]; then
+    # In standalone mode, services must exit if they aren't needed, or just sleep/exit 0
+    # s6-rc services usually expect a long-running process.
+    # If this service is "oneshot", exit 0 is fine. If "longrun", we might need to block.
+    # But usually this service should only be enabled if network device is present.
+    # For now, we'll just exit cleanly and let s6 handle dependencies.
+    echo "[$(date)] INFO: No network device configured, socat not needed."
+    exit 0
+fi
+
+echo "[$(date)] INFO: Starting socat TCP client for OTBR daemon..."
+# Remove s6-notifyoncheck as we don't need strict notification here for standalone
+exec /usr/bin/socat -d pty,raw,echo=0,link=/tmp/ttyOTBR,ignoreeof "tcp:${NETWORK_DEVICE}"
