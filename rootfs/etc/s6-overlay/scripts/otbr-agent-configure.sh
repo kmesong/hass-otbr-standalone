@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/command/with-contenv bash
 
 # Wait for OTBR agent to be ready
 sleep 5
