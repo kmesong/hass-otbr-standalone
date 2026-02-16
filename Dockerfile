@@ -27,6 +27,12 @@ RUN rm -f /etc/s6-overlay/scripts/enable-check.sh \
 
 COPY rootfs /
 
+# Create symlinks for otbr binaries (must be done after COPY to ensure they exist)
+RUN ln -sf "/opt/otbr-stable/sbin/otbr-agent" /usr/sbin/otbr-agent && \
+    ln -sf "/opt/otbr-stable/sbin/otbr-web" /usr/sbin/otbr-web && \
+    ln -sf "/opt/otbr-stable/sbin/ot-ctl" /usr/sbin/ot-ctl && \
+    ln -sf "/opt/otbr-stable/sbin/mdnsd" /usr/sbin/mdnsd
+
 RUN chmod +x /etc/s6-overlay/s6-rc.d/otbr-agent/run && \
     chmod +x /etc/s6-overlay/scripts/* && \
     chmod +x /etc/s6-overlay/s6-rc.d/*/run 2>/dev/null || true && \
