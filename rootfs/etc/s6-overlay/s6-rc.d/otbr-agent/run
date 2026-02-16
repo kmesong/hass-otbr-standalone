@@ -153,6 +153,9 @@ done
 
 echo "[$(date)] INFO: Syslog socket is ready."
 
+# Small delay to ensure radio is ready after previous attempts
+sleep 2
+
 # 6. Construct Radio URL
 # ------------------------------------------------------------------------------
 RADIO_URL="spinel+hdlc+uart://${DEVICE}?uart-baudrate=${BAUDRATE}"
@@ -174,10 +177,25 @@ echo "[$(date)] INFO: Radio URL: ${RADIO_URL}"
 # We explicitly set -I wpan0 (default) and use -s for stdout logging.
 
 echo "[$(date)] INFO: Executing otbr-agent..."
+echo "[$(date)] INFO: Command: otbr-agent -I wpan0 -d${OTBR_LOG_LEVEL} -v -s ${RADIO_URL}"
 
-exec otbr-agent \
+# Run otbr-agent and capture both stdout and stderr
+otbr-agent \
     -I wpan0 \
     -d"${OTBR_LOG_LEVEL}" \
     -v \
     -s \
-    "${RADIO_URL}"
+    "${RADIO_URL}" 2>&1 &
+
+OTBR_PID=$!
+echo "[$(date)] INFO: otbr-agent started with PID ${OTBR_PID}"
+
+# Wait for otbr-agent to finish
+wait $OTBR_PID
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -ne 0 ]; then
+    echo "[$(date)] ERROR: otbr-agent exited with code ${EXIT_CODE}"
+fi
+
+exit $EXIT_CODE
