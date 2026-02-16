@@ -1,41 +1,68 @@
-# Standalone Build (Recommended)
+# Standalone OpenThread Border Router (Docker)
 
-This folder contains a Dockerfile to build the OpenThread Border Router image directly from the official Home Assistant base image (`homeassistant/amd64-addon-otbr`), completely bypassing the `ownbee/hass-otbr-docker` dependency.
+This project provides a **standalone Docker image** for the OpenThread Border Router (OTBR), built directly from the [official Home Assistant Add-on](https://github.com/home-assistant/addons/tree/master/openthread_border_router).
 
-## Why use this?
-*   **Official Base**: Uses the source maintained by Nabu Casa/Home Assistant team.
-*   **No Middleware**: Removes the dependency on `ownbee` for updates.
-*   **Security**: Fewer layers, less potential for stale vulnerabilities.
+It allows you to run OTBR in a standard Docker environment (without Home Assistant Supervisor) while applying critical stability and compatibility fixes for certain radio hardware.
 
-## How to Build
+## Modifications from Official Base Image
 
-1.  Navigate to this folder:
-    ```bash
-    cd standalone
-    ```
+This image is based on `homeassistant/amd64-addon-otbr` but applies the following critical changes to ensure stability in a standalone Docker environment:
 
-2.  Run the build script:
-    ```bash
-    ./build.sh
-    ```
-    OR manually:
-    ```bash
-    docker build -t hass-otbr-standalone .
-    ```
+### 1. Compatibility Fixes (ZBT-1 / SkyConnect)
+*   **Removed `uart-init-deassert`**: The official add-on appends this flag to the radio URL when flow control is disabled. This causes connection failures with Silicon Labs ZBT-1 (formerly SkyConnect) and generic RCP firmware. We strip this flag to ensure generic RCP compatibility.
 
-## How to Run
+### 2. Crash Prevention (Syslog Emulation)
+*   **Dummy Syslog Listener**: The `otbr-agent` binary attempts to connect to `/dev/log` (system syslog) on startup. In a minimal container without a syslog daemon, this causes the agent to **exit immediately with code 1** (silent failure). We inject a lightweight listener to keep the agent alive and capture logs.
 
-Update your `docker-compose.yml` to use the new image name:
+### 3. Stability Fixes (Networking)
+*   **Removed Backbone Interface (`-B`)**: Configuring a backbone interface (e.g., `eno1`) in Docker `host` networking mode can cause crashes or routing loops on some host network configurations. We removed this flag to allow OTBR to manage its own Thread interface (`wpan0`) safely.
+
+### 4. Standalone Support
+*   **Dependencies**: Added `socat` (for network radios) and `universal-silabs-flasher` (for firmware updates), which are present in the Supervisor environment but missing from the raw base image.
+*   **Entrypoint**: Configured to run without the Home Assistant Supervisor context.
+
+## Usage
+
+### Docker Compose
 
 ```yaml
+version: '3.8'
 services:
   otbr:
-    image: hass-otbr-standalone
-    build:
-      context: ./standalone
-    # ... rest of configuration same as before
+    image: ghcr.io/kmesong/hass-otbr-standalone:latest
+    container_name: otbr
+    restart: unless-stopped
+    privileged: true
+    network_mode: host
+    volumes:
+      - ./otbr_data:/var/lib/thread
+    devices:
+      - /dev/ttyUSB1:/dev/ttyUSB1
+    environment:
+      - DEVICE=/dev/ttyUSB1
+      - BAUDRATE=460800
+      - OTBR_REST_PORT=8082
+      - OTBR_WEB_PORT=8081
 ```
 
-## Maintenance
+### Environment Variables
 
-This image copies the `rootfs/` from the parent directory. If you make changes to the startup script in the parent `rootfs/`, simply rebuild this standalone image to apply them.
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DEVICE` | `/dev/ttyUSB0` | Path to your Thread Radio (RCP) |
+| `BAUDRATE` | `460800` | UART Baudrate (115200, 460800, etc.) |
+| `OTBR_WEB_PORT` | `8081` | Port for the Web GUI |
+| `OTBR_REST_PORT` | `8082` | Port for the REST API (used by HA integration) |
+| `FLOW_CONTROL` | `1` | `1` for Hardware Flow Control (RTS/CTS), `0` for None |
+
+## Troubleshooting
+
+### "otbr-agent exited with code 1"
+This usually happens if the syslog listener fails to start or if the radio cannot be accessed.
+1.  Check logs: `docker logs otbr`
+2.  Verify device: Ensure `/dev/ttyUSBx` exists and is passed to the container.
+
+### Radio Connection Failed
+If the log shows "Radio initialization failed":
+1.  Verify the firmware on your dongle is **OpenThread RCP** (not Zigbee/NCP).
+2.  Try changing `BAUDRATE`. Common values are `460800` (ZBT-1) or `115200` (Nordic).
