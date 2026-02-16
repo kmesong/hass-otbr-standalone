@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  otbr:
+    container_name: otbr-standalone
+    build: .
+    image: ghcr.io/kmesong/hass-otbr-standalone:latest
+    restart: unless-stopped
+    privileged: true # Required for Thread networking
+    network_mode: host # Required for mDNS and Thread
+    cap_add:
+      - SYS_ADMIN
+      - NET_ADMIN
+    environment:
+      # Serial device configuration
+      DEVICE: "/dev/ttyUSB1"
+      BAUDRATE: "460800"
+      FLOW_CONTROL: "0"  # Set to 1 if your radio needs hardware flow control
+      
+      # Network configuration
+      BACKBONE_IF: "eno1"  # Change to your network interface (eth0, wlan0, enp3s0, etc.)
+      
+      # OTBR settings
+      OTBR_REST_PORT: "8082"  # Home Assistant connects to this port
+      OTBR_WEB_PORT: "8081"   # Optional web UI (for debugging)
+      OTBR_LOG_LEVEL: "debug" # CHANGED TO DEBUG for troubleshooting (info, debug, notice, warning, error)
+      
+      # Features
+      FIREWALL: "0"           # Enable OpenThread firewall (recommended)
+      NAT64: "1"              # Enable NAT64 for IPv4 access from Thread devices
+      AUTOFLASH_FIRMWARE: "0" # Set to 1 to auto-flash Home Assistant Connect ZBT-1
+      
+      # Network device (optional - for TCP-based RCP)
+      # NETWORK_DEVICE: "192.168.1.100:6638"  # Uncomment if using network-based RCP
+      
+      # S6 Overlay debugging (uncomment for more verbose startup logs)
+      S6_VERBOSITY: "2"
+      S6_CMD_WAIT_FOR_SERVICES_MAXTIME: "0"  # Wait indefinitely for services
+      
+    devices:
+      - /dev/ttyUSB1:/dev/ttyUSB1  # Change to your serial device
+      - /dev/net/tun:/dev/net/tun  # Required for Thread
+    volumes:
+      - ./otbr_data:/var/lib/thread  # Persistent storage for Thread network
+    labels:
+      - "com.example.description=Modified OTBR without uart-init-deassert"
+      - "com.example.fixed-issue=Removes uart-init-deassert parameter from Radio URL"
+    # Healthcheck to monitor container status
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/node"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

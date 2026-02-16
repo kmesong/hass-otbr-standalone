@@ -1,0 +1,212 @@
+#!/usr/bin/with-contenv bashio
+# ==============================================================================
+# Home Assistant Community Add-on: OpenThread Border Router
+# Runs the OpenThread Border Router
+# ==============================================================================
+
+set -e
+
+declare device
+declare baudrate
+declare flow_control
+declare radio_url
+declare network_device
+declare backbone_if
+declare otbr_log_level
+declare firewall
+declare nat64
+
+# Get configuration
+device="${DEVICE:-/dev/ttyUSB0}"
+baudrate="${BAUDRATE:-460800}"
+flow_control="${FLOW_CONTROL:-1}"
+network_device="${NETWORK_DEVICE:-}"
+backbone_if="${BACKBONE_IF:-eth0}"
+otbr_log_level="${OTBR_LOG_LEVEL:-info}"
+firewall="${FIREWALL:-1}"
+nat64="${NAT64:-1}"
+
+echo "[$(date)] INFO: Starting OTBR configuration..."
+echo "[$(date)] INFO: Device: ${device}"
+echo "[$(date)] INFO: Baudrate: ${baudrate}"
+echo "[$(date)] INFO: Flow Control: ${flow_control}"
+echo "[$(date)] INFO: Backbone Interface: ${backbone_if}"
+
+# Verify device exists
+if [[ -z "${network_device}" ]]; then
+    if [[ ! -e "${device}" ]]; then
+        echo "[$(date)] ERROR: Device ${device} does not exist!"
+        echo "[$(date)] ERROR: Available devices:"
+        ls -la /dev/tty* 2>/dev/null || echo "No /dev/tty* devices found"
+        exit 1
+    fi
+    
+    if [[ ! -r "${device}" ]] || [[ ! -w "${device}" ]]; then
+        echo "[$(date)] ERROR: Device ${device} is not readable/writable!"
+        echo "[$(date)] ERROR: Device permissions:"
+        ls -la "${device}"
+        exit 1
+    fi
+    
+    echo "[$(date)] INFO: Device ${device} verified OK"
+fi
+
+# Verify backbone interface exists
+if ! ip link show "${backbone_if}" >/dev/null 2>&1; then
+    echo "[$(date)] ERROR: Backbone interface ${backbone_if} does not exist!"
+    echo "[$(date)] ERROR: Available interfaces:"
+    ip link show
+    exit 1
+fi
+
+echo "[$(date)] INFO: Backbone interface ${backbone_if} verified OK"
+
+# Build radio URL
+if [[ -n "${network_device}" ]]; then
+    radio_url="spinel+hdlc+tcp://${network_device}"
+    echo "[$(date)] INFO: Using network-based RCP: ${network_device}"
+else
+    radio_url="spinel+hdlc+uart://${device}?uart-baudrate=${baudrate}"
+    
+    # MODIFIED: Only add uart-flow-control, NOT uart-init-deassert
+    # This fixes compatibility with radios that don't need init-deassert
+    if [[ "${flow_control}" == "1" ]]; then
+        radio_url="${radio_url}&uart-flow-control"
+        echo "[$(date)] INFO: Hardware flow control enabled"
+    fi
+fi
+
+# Setup firewall if enabled
+if [[ "${firewall}" == "1" ]]; then
+    echo "[$(date)] INFO: Setup OTBR firewall..."
+    
+    OTBR_FORWARD_INGRESS_CHAIN="OTBR_FORWARD_INGRESS"
+    THREAD_IF="wpan0"
+    
+    # Check if chain already exists, if so, flush and delete it
+    if ip6tables -L ${OTBR_FORWARD_INGRESS_CHAIN} >/dev/null 2>&1; then
+        ip6tables -F ${OTBR_FORWARD_INGRESS_CHAIN}
+        ip6tables -D FORWARD -o ${THREAD_IF} -j ${OTBR_FORWARD_INGRESS_CHAIN} 2>/dev/null || true
+        ip6tables -X ${OTBR_FORWARD_INGRESS_CHAIN}
+    fi
+    
+    # Create ipset for ingress filtering
+    ipset create -exist otbr-ingress-deny-src hash:net family inet6
+    ipset create -exist otbr-ingress-allow-dst hash:net family inet6
+    
+    # Flush ipsets
+    ipset flush otbr-ingress-deny-src 2>/dev/null || true
+    ipset flush otbr-ingress-allow-dst 2>/dev/null || true
+    
+    # Populate ipsets with Thread multicast addresses
+    ipset add -exist otbr-ingress-allow-dst ff02::1
+    ipset add -exist otbr-ingress-allow-dst ff02::2
+    ipset add -exist otbr-ingress-allow-dst ff03::1
+    ipset add -exist otbr-ingress-allow-dst ff03::2
+    ipset add -exist otbr-ingress-allow-dst ff03::fc
+    
+    # Create and configure firewall chain
+    ip6tables -N ${OTBR_FORWARD_INGRESS_CHAIN}
+    ip6tables -I FORWARD 1 -o ${THREAD_IF} -j ${OTBR_FORWARD_INGRESS_CHAIN}
+    ip6tables -A ${OTBR_FORWARD_INGRESS_CHAIN} -m pkttype --pkt-type unicast -i ${THREAD_IF} -j DROP
+    ip6tables -A ${OTBR_FORWARD_INGRESS_CHAIN} -m set --match-set otbr-ingress-deny-src src -j DROP
+    ip6tables -A ${OTBR_FORWARD_INGRESS_CHAIN} -m set --match-set otbr-ingress-allow-dst dst -j ACCEPT
+    ip6tables -A ${OTBR_FORWARD_INGRESS_CHAIN} -m pkttype --pkt-type unicast -j DROP
+    ip6tables -A ${OTBR_FORWARD_INGRESS_CHAIN} -j ACCEPT
+    
+    echo "[$(date)] INFO: Firewall configured successfully"
+fi
+
+# Setup NAT64 if enabled
+if [[ "${nat64}" == "1" ]]; then
+    echo "[$(date)] INFO: Setup OTBR NAT64..."
+    # NAT64 setup is handled by otbr-agent itself
+fi
+
+# Cleanup wpan0 if exists
+if ip link show wpan0 >/dev/null 2>&1; then
+    echo "[$(date)] WARNING: wpan0 exists, deleting it to prevent conflicts..."
+    ip link delete wpan0 || echo "[$(date)] WARNING: Failed to delete wpan0"
+fi
+
+# Log network state
+echo "[$(date)] INFO: Network interfaces:"
+ip addr show
+
+# Start otbr-agent
+echo "[$(date)] INFO: Starting otbr-agent..."
+echo "[$(date)] INFO: Radio URL: ${radio_url}"
+echo "[$(date)] INFO: Backbone Interface: ${backbone_if}"
+echo "[$(date)] INFO: Thread Interface: wpan0"
+echo "[$(date)] INFO: Log Level: ${otbr_log_level}"
+
+# Test serial device before starting (if not network-based)
+if [[ -z "${network_device}" ]]; then
+    echo "[$(date)] INFO: Testing serial device communication..."
+    if ! stty -F "${device}" ${baudrate} 2>&1; then
+        echo "[$(date)] ERROR: Failed to set baudrate on ${device}"
+        echo "[$(date)] ERROR: This might indicate a hardware or permission issue"
+        exit 1
+    fi
+    echo "[$(date)] INFO: Serial device communication test passed"
+
+    # DEBUG: Probe the device to be sure
+    # echo "[$(date)] INFO: Probing device firmware..."
+    # universal-silabs-flasher --device "${device}" probe || echo "[$(date)] WARNING: Probe failed but continuing..."
+fi
+
+# Start dummy syslog listener to prevent otbr-agent crash
+# (otbr-agent requires /dev/log even with -s flag)
+echo "[$(date)] INFO: Starting dummy syslog listener..."
+python3 -c "import socket, os, sys, signal; 
+socket_path = '/dev/log';
+if os.path.exists(socket_path):
+    try:
+        os.remove(socket_path);
+    except OSError:
+        pass
+s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM);
+s.bind(socket_path);
+os.chmod(socket_path, 0o666);
+print(f'Syslog listener started on {socket_path}');
+sys.stdout.flush();
+def handler(signum, frame):
+    s.close();
+    sys.exit(0);
+signal.signal(signal.SIGTERM, handler);
+while True:
+    try:
+        data = s.recv(4096);
+        # print(f'SYSLOG: {data.decode(\"utf-8\", \"ignore\").strip()}'); # Uncomment to debug syslog
+    except Exception:
+        pass
+" &
+SYSLOG_PID=$!
+
+# Wait for syslog socket to be ready
+echo "[$(date)] INFO: Waiting for syslog socket..."
+timeout=50 # 5 seconds
+while [ ! -S /dev/log ]; do
+    sleep 0.1
+    timeout=$((timeout - 1))
+    if [ $timeout -le 0 ]; then
+        echo "[$(date)] ERROR: Syslog socket failed to appear! otbr-agent may crash."
+        break
+    fi
+done
+echo "[$(date)] INFO: Syslog socket ready."
+
+# Run otbr-agent
+# NOTE: Backbone interface (-B) is disabled because it causes crashes with 'eno1'.
+# Thread interface defaults to wpan0.
+# We omit -I and -ddebug as they seem to cause crashes in this environment.
+echo "[$(date)] INFO: Executing: otbr-agent -v -s ${radio_url}"
+
+exec otbr-agent \
+    -v \
+    -s \
+    "${radio_url}"
+
+
+
+
