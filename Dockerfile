@@ -20,9 +20,17 @@ RUN apt-get update \
        python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
+RUN rm -f /etc/s6-overlay/scripts/enable-check.sh \
+    /etc/s6-overlay/scripts/banner.sh \
+    /etc/s6-overlay/scripts/otbr-agent-configure.sh \
+    /etc/s6-overlay/scripts/otbr-agent-rest-discovery.sh
+
 COPY rootfs /
 
-RUN chmod +x /etc/s6-overlay/s6-rc.d/otbr-agent/run
+RUN chmod +x /etc/s6-overlay/s6-rc.d/otbr-agent/run && \
+    chmod +x /etc/s6-overlay/scripts/* && \
+    chmod +x /etc/s6-overlay/s6-rc.d/*/run 2>/dev/null || true && \
+    chmod +x /etc/s6-overlay/s6-rc.d/*/up 2>/dev/null || true
 
 LABEL \
     io.hass.name="OpenThread Border Router" \
